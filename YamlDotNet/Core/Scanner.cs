@@ -420,6 +420,21 @@ namespace YamlDotNet.Core
                 }
             }
 
+            // A lone ':' followed by a break/zero is a plain scalar, not a
+            // value indicator, ONLY when no simple key is possible: the
+            // simple-key flag is the discriminator. When a key IS possible
+            // (`a:\n  b:`, `- key:`) the `:` is that key's value indicator
+            // and FetchValue must claim it -- routing it here loops
+            // (FetchPlainScalar returns an empty scalar without consuming
+            // the `:` and FetchMoreTokens re-invokes the guard forever).
+            if (analyzer.Check(':') && analyzer.IsBreakOrZero(1) && flowLevel == 0 &&
+                (previous is Tokens.Value || previous is Tokens.BlockEntry) &&
+                !simpleKeyAllowed && !simpleKeys.Peek().IsPossible)
+            {
+                FetchPlainScalar();
+                return;
+            }
+
             // Is it the value indicator?
             if (analyzer.Check(':') &&
                 (flowLevel > 0 || analyzer.IsWhiteBreakOrZero(1)) &&
@@ -2170,11 +2185,20 @@ namespace YamlDotNet.Core
                          (flowLevel > 0 && analyzer.Check(',', 1))) ||
                         (flowLevel > 0 && analyzer.Check(",[]{}")))
                     {
-                        if (flowLevel == 0 && !key.IsPossible)
+                        if (flowLevel == 0 && !key.IsPossible && analyzer.IsBreakOrZero(1))
                         {
-                            tokens.Enqueue(new Error("While scanning a plain scalar value, found invalid mapping.", cursor.Mark(), cursor.Mark()));
+                            // A trailing ':' at end of line (e.g. "::" or a lone ':')
+                            // is part of the plain scalar, not a mapping indicator,
+                            // when no simple key is possible. Fall through to consume it.
                         }
-                        break;
+                        else
+                        {
+                            if (flowLevel == 0 && !key.IsPossible)
+                            {
+                                tokens.Enqueue(new Error("While scanning a plain scalar value, found invalid mapping.", cursor.Mark(), cursor.Mark()));
+                            }
+                            break;
+                        }
                     }
 
                     // Check if we need to join whitespaces and breaks.
